@@ -6,6 +6,28 @@ import cv2
 import numpy as np
 import time
 import darknet
+from threading import Thread
+
+global darknet_image
+global detections
+global frame_resized
+
+def detect_thread():
+    global detections
+    detections = darknet.detect_image(netMain, metaMain, darknet_image, thresh=0.25)
+
+def fetch_thread(frame_read):
+    global darknet_image
+    global frame_resized
+    
+    frame_rgb = cv2.cvtColor(frame_read, cv2.COLOR_BGR2RGB)
+    frame_resized = cv2.resize(frame_rgb,
+                               (darknet.network_width(netMain),
+                                darknet.network_height(netMain)),
+                               interpolation=cv2.INTER_LINEAR)
+
+    darknet.copy_image_from_bytes(darknet_image,frame_resized.tobytes())
+
 
 def convertBack(x, y, w, h):
     xmin = int(round(x - (w / 2)))
@@ -79,7 +101,7 @@ def YOLO():
                     pass
         except Exception:
             pass
-    #cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(0)
     cap = cv2.VideoCapture("test.mp4")
     cap.set(3, 1280)
     cap.set(4, 720)
@@ -89,27 +111,36 @@ def YOLO():
     print("Starting the YOLO loop...")
 
     # Create an image we reuse for each detect
+    global  darknet_image 
     darknet_image = darknet.make_image(darknet.network_width(netMain),
                                     darknet.network_height(netMain),3)
+    ret, frame_read = cap.read()
+    fetch_t = Thread(target = fetch_thread, args = (frame_read, ))
+    fetch_t.start()
+    fetch_t.join()
     while True:
-        prev_time = time.time()
         ret, frame_read = cap.read()
-        frame_rgb = cv2.cvtColor(frame_read, cv2.COLOR_BGR2RGB)
-        frame_resized = cv2.resize(frame_rgb,
-                                   (darknet.network_width(netMain),
-                                    darknet.network_height(netMain)),
-                                   interpolation=cv2.INTER_LINEAR)
-
-        darknet.copy_image_from_bytes(darknet_image,frame_resized.tobytes())
-
-        detections = darknet.detect_image(netMain, metaMain, darknet_image, thresh=0.25)
-        image = cvDrawBoxes(detections, frame_resized)
+        if ret == False:
+            detect_t = Thread(target = detect_thread, args = ( ))
+            detect_t.start()
+            detect_t.join()
+            break
+        prev_frame_resized = frame_resized
+        fetch_t = Thread(target = fetch_thread, args = (frame_read, ))
+        detect_t = Thread(target = detect_thread, args = ( ))
+        prev_time = time.time()
+        detect_t.start()
+        fetch_t.start()
+        detect_t.join()
+        fetch_t.join()
+        image = cvDrawBoxes(detections, prev_frame_resized)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         print(1/(time.time()-prev_time))
         cv2.imshow('Demo', image)
         cv2.waitKey(3)
     cap.release()
     out.release()
+
 
 if __name__ == "__main__":
     YOLO()
